@@ -4,6 +4,8 @@ import os
 import cv2 as cv
 import numpy as np
 from collections import Counter
+import sys
+print(sys.executable)
 
 # ===================== Define Ball Colours and Values =====================
 ballColours = {
@@ -76,13 +78,13 @@ previousWhite, roundedCoordinates = [0, 0], [0, 0]
 previousBalls = []
 previousColours = [Counter() for x in range(10)]
 playerScores = [0, 0]
-currentPlayer = False
-stopCounter = 0
+stopCounter = 30
 moveCounter = 0
 moving, currentPlayer = False, False
 positionRounding = 2
 switchCounter = -1
 annotation = ""
+frameCount = 0
 
 # ===================== Main Sequence =====================
 while cap.isOpened(): #Run while the video capture is open
@@ -98,7 +100,7 @@ while cap.isOpened(): #Run while the video capture is open
             previousColours[i] = previousColours[i+1]
     previousColours[9] = Counter() #Reset the current detected balls
 
-    #Ball Detection
+    # ===================== Ball Detection ===================== 
     if results[0] is not None: #If YOLO has detected any objects:
         for ball in results[0].boxes: #Loop through each detection
             x, y, w, h = ball.xywh[0].tolist() #Get the x and y coordinate and the width and height of the detected object
@@ -107,7 +109,6 @@ while cap.isOpened(): #Run while the video capture is open
             if id != "sports ball": #If the object is not a ball,
                 continue #Skip to the next object
 
-            numBalls += 1 #Add one to the detected ball count =====================
             colour = findColour((int(x), int(y)), w/2, frame) #Find the average colour of the ball
             ballColour = findClosestColour(colour, ballColours) #Find the closest snooker ball it could then be
             cv.putText(annotated, ballColour, (int(x) - 10, int(y) - 20), cv.FONT_HERSHEY_COMPLEX, 0.6, (255, 255, 255), 2) #Label the ball with this colour
@@ -120,7 +121,7 @@ while cap.isOpened(): #Run while the video capture is open
             print(x1)
             annotated = cv.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (165, 0, 255)) #Use the coordinates to draw a bounding box over the ball
     
-    #Pot Detection
+    # ===================== Pot Detection ===================== 
     if previousWhite[0] > roundedCoordinates[0] + positionRounding or previousWhite[0] < roundedCoordinates[0] - positionRounding or previousWhite[1] > roundedCoordinates[1] + positionRounding or previousWhite[1] < roundedCoordinates[1] - positionRounding: #If the white ball has moved more than the alloted distance since its last detection:
         if moveCounter > 1: #If the white has moved more than once in the alloted period of time:
             stopCounter = 0 #Reset the stopped counter
@@ -167,13 +168,12 @@ while cap.isOpened(): #Run while the video capture is open
                 switchCounter += 1
         else: #Else, Continue adding to the stop counter
             stopCounter += 1
-            Moving = False
+            moving = False
             annotation = "not moving"
     
     previousWhite = roundedCoordinates# Replace the previous white position with the current white position
 
     # ===================== Drawing to the Screen =====================
-    annotated = cv.putText(annotated, str(annotation), (40, 40), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
 
     annotated = cv.copyMakeBorder(annotated, 0, 60, 0, 0, borderType=cv.BORDER_CONSTANT, value=(0, 0, 0)) #Make a black border of height 60px at the bottom of the screen
     height, width, channels = annotated.shape #Get the width and height of the frame
