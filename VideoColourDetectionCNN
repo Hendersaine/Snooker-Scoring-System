@@ -1,0 +1,224 @@
+# ===================== Import Libraries =====================
+import cv2 as cv
+import torch
+import torchvision.transforms as T
+from torchvision.models.detection import fasterrcnn_resnet50_fpn
+import sys
+print(sys.executable)
+import os
+import numpy as np
+from collections import Counter
+
+# ===================== Define Ball Colours and Values =====================
+ballColours = {
+    "red" : (5, 150, 255),
+    "shadedRed" : (178, 226, 131),
+    "yellow" : (30, 160, 255),
+    "green" : (85, 250, 222),
+    "brown" : (15, 165, 165),
+    "blue" : (97, 115, 204),
+    "pink" : (9, 90, 236),
+    "black" : (73, 102, 65),
+    "white" : (44, 15, 255),
+    "shadedWhite" : (41, 133, 173),
+    "shadedBlack" : (54, 149, 60)
+}
+ballValues = {
+    "red" : 1,
+    "yellow" : 2,
+    "green" : 3,
+    "brown" : 4,
+    "blue" : 5,
+    "pink" : 6,
+    "black" : 7,
+}
+
+# ===================== The functions to determine ball colours =====================
+def findColour(center, radius, img):
+    mask = np.zeros(img.shape[:2], dtype=np.uint8) #Create a mask of the circle around where the ball was detected
+    cv.circle(mask, center, int(radius*0.5), 255, -1)
+    colour = cv.mean(img, mask=mask) #Average the colour of the whole circle
+    print(center)
+    return colour #Return this colour
+def findClosestColour(colour, ballColours):
+    bgrPixel = np.uint8([[colour]]) #Get the detected colour as a single pixel
+    hsvPixel = cv.cvtColor(bgrPixel, cv.COLOR_BGR2HSV) #Convert the pixel to HSV
+    hsv = hsvPixel[0][0]
+    print(hsv)
+
+    #Calculate the closest ball colour that matches this pixel
+    bestDistance = 99999
+    bestColour = None
+
+    for name, ballColour in ballColours.items(): #Loop through every ball colour
+        dh = min(abs(int(hsv[0]) - ballColour[0]), 180 - abs(int(hsv[0]) - ballColour[0])) #Find the distance between the hues
+        ds = abs(int(hsv[1]) - ballColour[1]) #Find the distance between saturations
+        dv = abs(int(hsv[2]) - ballColour[2]) #Find the distance between values
+        colourDistance = 8*dh + ds + dv #Get the total distance over the 3 values (heavilly weighted towards hue)
+        if colourDistance < bestDistance: #If this distance is better than the current one:
+            bestDistance = colourDistance #Replace the best distance with the current one
+            bestColour = name
+    
+    #If the best colour is the shaded version of an existing colour, set it to that colour
+    if bestColour == "shadedRed": bestColour = "red"
+    elif bestColour == "shadedBlack": bestColour = "black"
+    elif bestColour == "shadedWhite": bestColour = "white"
+    print(bestColour)
+    return bestColour #Return the best colour
+
+# ===================== Initial Declarations =====================
+#Find the base path for the file
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+model = fasterrcnn_resnet50_fpn(pretrained=True)
+model.eval()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+video_path = os.path.join(base_dir, "Images", "SnookerVid14 .mp4") #Load the selected video from the path provided
+cap = cv.VideoCapture(video_path)#Open the video to be processed
+
+#Define the base values for neccesary variables
+previousWhite, roundedCoordinates = [0, 0], [0, 0]
+previousBalls = []
+previousColours = [Counter() for x in range(10)]
+playerScores = [0, 0]
+stopCounter = 0
+moveCounter = 0
+moving, currentPlayer = False, False
+positionRounding = 2
+switchCounter = -1
+annotation = ""
+
+transform = T.Compose([
+    T.ToTensor()
+])
+
+# ===================== Main Sequence =====================
+while cap.isOpened(): #Run while the video capture is open
+    ret, frame = cap.read() #Close if there is no next frame found
+    if not ret:
+        break
+
+    image_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+    image_tensor = transform(image_rgb)
+    image_tensor = image_tensor.to(device)
+
+    with torch.no_grad():
+        outputs = model([image_tensor])[0]
+
+    annotated = frame.copy() #Copy the frame into an annotated frame to be edited on
+
+    if not moving: #If the white ball is not moving,
+        for i in range(9): #Shift the previous detected colours along the list
+            previousColours[i] = previousColours[i+1]
+    previousColours[9] = Counter() #Reset the current detected balls
+
+    #Ball Detection
+    for i in range(len(outputs["boxes"])):
+        score = outputs["scores"][i].item()
+        label = outputs["labels"][i].item()
+
+        # Confidence threshold
+        if score < 0.1:
+            continue
+
+        # COCO class 37 = sports ball
+        if label != 37:
+            continue
+
+        x1, y1, x2, y2 = outputs["boxes"][i].tolist()
+
+        # Convert to centre + radius (match your existing pipeline)
+        x = (x1 + x2) / 2
+        y = (y1 + y2) / 2
+        w = x2 - x1
+        h = y2 - y1
+
+        radius = min(w, h) / 2 * 0.6  # slightly shrink for better colour sampling
+
+        colour = findColour((int(x), int(y)), int(radius), frame)
+        ballColour = findClosestColour(colour, ballColours) #Find the closest snooker ball it could then be
+        cv.putText(annotated, ballColour, (int(x) - 10, int(y) - 20), cv.FONT_HERSHEY_COMPLEX, 0.6, (255, 255, 255), 2) #Label the ball with this colour
+
+        if ballColour == "white": #If the white has been found:
+            roundedCoordinates = [x,y] #Update the current coordinates of the white ball
+
+        previousColours[9][ballColour] += 1 #Add this ball to the current list of colours
+        annotated = cv.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (165, 0, 255))
+    
+    #Pot Detection
+    if previousWhite[0] > roundedCoordinates[0] + positionRounding or previousWhite[0] < roundedCoordinates[0] - positionRounding or previousWhite[1] > roundedCoordinates[1] + positionRounding or previousWhite[1] < roundedCoordinates[1] - positionRounding: #If the white ball has moved more than the alloted distance since its last detection:
+        if moveCounter > 1: #If the white has moved more than once in the alloted period of time:
+            stopCounter = 0 #Reset the stopped counter
+            moving = True #Set the flag for the white ball moving
+            annotation = "Moving" 
+            previousBalls = [] #Reset the list for average ball locations after a shot
+        else:
+            moveCounter += 1 #If the white has only moved once in the alloted period of time:
+            moving = False #Set the moving flag to false
+    else: #Else, the white is currently thought to be stationary
+        if stopCounter < 20: #If the white has moved in the past 20 frames:
+            stopCounter += 1 #Add one to the count of stationary frames
+            moving = True #Set the moving flag to true
+            previousBalls.append(previousColours[9]) #Add the current detected balls to the previous balls list
+            annotation = previousColours[9]
+        elif stopCounter == 20: #Else if the ball has just been deemed to have stopped:
+            moveCounter = 0 #Reset the count of moving frames
+            stopCounter += 1 #Add one to the count of stationary frames
+            moving = False #Set the moving flag to false
+
+            ballsWhenMoving = Counter() #Create a new counter for average ball detections after the white moved
+            ballsWhenStopped = Counter() #Create a new counter for average ball detections before the white moved
+            for counter in previousBalls: #Loop through every moving ball detection index
+                ballsWhenMoving += counter #Add the count to the total ballsWhenMoving counter
+            for colour in ballsWhenMoving: #Loop through every colour in the counter
+                ballsWhenMoving[colour] = round(ballsWhenMoving[colour]/20) #Average the detections out
+            for x in range(9): #Loop through every stationary ball detection but the most recent
+                ballsWhenStopped += previousColours[x] #Add the count to the total ballsWhenStopped counter
+            for colour in ballsWhenStopped: #Loop through every colour in the counter
+                ballsWhenStopped[colour] = round(ballsWhenStopped[colour]/9) #Average the detections out
+            pottedBall = list((ballsWhenStopped - ballsWhenMoving).elements()) #Create a list for every ball that was in frame before the white moved but not after
+
+            if pottedBall: #If a ball was potted:
+                if "white" in pottedBall or "shadedWhite" in pottedBall: #If the ball was the white:
+                    annotation = "pot miss"
+                    currentPlayer = not currentPlayer #Switch the current player at the table
+                    playerScores[int(currentPlayer)] += 4 #Add 4 points to the new player
+                else: #Else, the player has potted a ball:
+                    playerScores[int(currentPlayer)] += ballValues[pottedBall[0]] #Add the value of the ball potted to the player's score
+                annotation = str(playerScores)
+            else: #Else, the player has misseda ball, so switch to the other player
+                currentPlayer = not currentPlayer
+                annotation = "pot miss"
+                switchCounter += 1
+        else: #Else, Continue adding to the stop counter
+            stopCounter += 1
+            moving = False
+            annotation = "not moving"
+    
+    previousWhite = roundedCoordinates# Replace the previous white position with the current white position
+
+    # ===================== Drawing to the Screen =====================
+    annotated = cv.putText(annotated, str(annotation), (40, 40), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
+
+    annotated = cv.copyMakeBorder(annotated, 0, 60, 0, 0, borderType=cv.BORDER_CONSTANT, value=(0, 0, 0)) #Make a black border of height 60px at the bottom of the screen
+    height, width, channels = annotated.shape #Get the width and height of the frame
+    annotated = cv.putText(annotated, ("Player 1"), (40, height-20), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2) #Add text for player 1's name
+    annotated = cv.putText(annotated, ("Player 2"), (width-300, height-20), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2) #Add text for player 2's name
+    annotated = cv.rectangle(annotated, (int((width/2)-100), height-60), (int((width/2)+100), height), (255, 255, 255), -1) #Add The box that contains the players' scores
+    annotated = cv.line(annotated, (int(width/2), height-10), (int(width/2), height-50), (0, 0, 0), 1) #Add a line to seperate the 2 scores
+    annotated = cv.putText(annotated, str(playerScores[0]), (int((width/2)-60), height-20), cv.FONT_HERSHEY_COMPLEX, 1, (0, 0, 0), 2) #Add text for the first player's score
+    annotated = cv.putText(annotated, str(playerScores[1]), (int((width/2)+30), height-20), cv.FONT_HERSHEY_COMPLEX, 1, (0, 0, 0), 2) #Add text for the second player's score
+    if not currentPlayer: #If the first player is at the table:
+        annotated = cv.circle(annotated, (int((width/2)-180), height-30), 10, (255, 255, 255), -1) #Display a circle to show that this player is at the table
+    else: #Else, the second player is at the table:
+        annotated = cv.circle(annotated, (int((width/2)+180), height-30), 10, (255, 255, 255), -1) #Display a circle to show that this player is at the table
+
+    cv.imshow("Detections", annotated)#Display the annotated frame to the screen
+
+    if cv.waitKey(1) == ord('q'): #If the 'q' key is pressed, stop the program
+        break
+#If the loop has been terminated,
+cap.release() #Close the video capture
+cv.destroyAllWindows() #Close the frame view window
