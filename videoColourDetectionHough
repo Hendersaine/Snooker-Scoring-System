@@ -1,0 +1,208 @@
+# ===================== Import Libraries =====================
+import sys
+import cv2 as cv
+import numpy as np
+import os
+from collections import Counter
+
+# ===================== Define Ball Colours and Values =====================
+ballColours = {
+    "red" : (5, 150, 255),
+    "shadedRed" : (178, 226, 131),
+    "yellow" : (30, 160, 255),
+    "green" : (85, 250, 222),
+    "brown" : (15, 165, 165),
+    "blue" : (97, 115, 204),
+    "pink" : (9, 90, 236),
+    "black" : (73, 102, 65),
+    "white" : (44, 15, 255),
+    "shadedWhite" : (41, 133, 173),
+    "shadedBlack" : (54, 149, 60)
+}
+ballValues = {
+    "red" : 1,
+    "yellow" : 2,
+    "green" : 3,
+    "brown" : 4,
+    "blue" : 5,
+    "pink" : 6,
+    "black" : 7,
+}
+
+# ===================== The functions to determine ball colours =====================
+def findColour(center, radius, img):
+    mask = np.zeros(img.shape[:2], dtype=np.uint8) #Create a mask of the circle around where the ball was detected
+    cv.circle(mask, center, int(radius*0.5), 255, -1)
+    colour = cv.mean(img, mask=mask) #Average the colour of the whole circle
+    print(center)
+    return colour #Return this colour
+def findClosestColour(colour, ballColours):
+    bgrPixel = np.uint8([[colour]]) #Get the detected colour as a single pixel
+    hsvPixel = cv.cvtColor(bgrPixel, cv.COLOR_BGR2HSV) #Convert the pixel to HSV
+    hsv = hsvPixel[0][0]
+    print(hsv)
+
+    #Calculate the closest ball colour that matches this pixel
+    bestDistance = 99999
+    bestColour = None
+
+    for name, ballColour in ballColours.items(): #Loop through every ball colour
+        dh = min(abs(int(hsv[0]) - ballColour[0]), 180 - abs(int(hsv[0]) - ballColour[0])) #Find the distance between the hues
+        ds = abs(int(hsv[1]) - ballColour[1]) #Find the distance between saturations
+        dv = abs(int(hsv[2]) - ballColour[2]) #Find the distance between values
+        colourDistance = 8*dh + ds + dv #Get the total distance over the 3 values (heavilly weighted towards hue)
+        if colourDistance < bestDistance: #If this distance is better than the current one:
+            bestDistance = colourDistance #Replace the best distance with the current one
+            bestColour = name
+    
+    #If the best colour is the shaded version of an existing colour, set it to that colour
+    if bestColour == "shadedRed": bestColour = "red"
+    elif bestColour == "shadedBlack": bestColour = "black"
+    elif bestColour == "shadedWhite": bestColour = "white"
+    print(bestColour)
+    return bestColour #Return the best colour
+
+# base_dir = os.path.dirname(os.path.abspath(__file__))
+# Filename = os.path.join(base_dir, "SnookerVid11.mp4")
+# source = cv.VideoCapture(Filename) 
+
+
+# ===================== Initial Declarations =====================
+#Find the base path for the file
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+video_path = os.path.join(base_dir, "Images", "SnookerVid11.mp4") #Load the selected video from the path provided
+cap = cv.VideoCapture(video_path)#Open the video to be processed
+print(video_path)
+print(cap.isOpened())
+
+#Define the base values for neccesary variables
+previousWhite, roundedCoordinates = [0, 0], [0, 0]
+previousBalls = []
+previousColours = [Counter() for x in range(10)]
+playerScores = [0, 0]
+stopCounter = 0
+moveCounter = 0
+moving, currentPlayer = False, False
+positionRounding = 3
+switchCounter = -1
+annotation = ""
+
+# ===================== Main Sequence =====================
+while cap.isOpened(): #Run while the video capture is open
+    ret, frame = cap.read() #Close if there is no next frame found
+    if not ret:
+        break
+
+    # gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    # gray = cv.medianBlur(gray, 5)
+    img_hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+    h, s, v = cv.split(img_hsv)
+    mask = ((s > 20) & (v > 20) & (h < 70) & (h > 50)).astype(np.uint8) * 255
+
+    # Blur to reduce noise
+    mask = cv.GaussianBlur(mask, (9, 9), 2)
+
+    if not moving: #If the white ball is not moving,
+        for i in range(9): #Shift the previous detected colours along the list
+            previousColours[i] = previousColours[i+1]
+    previousColours[9] = Counter() #Reset the current detected balls
+    
+    circles = cv.HoughCircles(mask, cv.HOUGH_GRADIENT, 1, 10,
+                            param1=120, param2=18,
+                            minRadius=12, maxRadius=25)
+    
+    if circles is not None:
+        circles = np.uint16(np.around(circles))
+        for i in circles[0, :]:
+            center = (i[0], i[1])
+            radius = i[2]
+
+            colour = findColour(center, radius, frame)
+            ballColour = findClosestColour(colour, ballColours)
+            
+            previousColours[9][ballColour] += 1 #Add this ball to the current list of colours
+            if ballColour == "white": #If the white has been found:
+                roundedCoordinates = center #Update the current coordinates of the white ball
+
+            # circle outline
+            cv.circle(frame, center, radius, colour, 2)
+            cv.putText(frame, ballColour, (i[0]-25, i[1]-10), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 1, cv.LINE_AA)
+    
+    #Pot Detection
+    if previousWhite[0] > roundedCoordinates[0] + positionRounding or previousWhite[0] < roundedCoordinates[0] - positionRounding or previousWhite[1] > roundedCoordinates[1] + positionRounding or previousWhite[1] < roundedCoordinates[1] - positionRounding: #If the white ball has moved more than the alloted distance since its last detection:
+        if moveCounter > 1: #If the white has moved more than once in the alloted period of time:
+            stopCounter = 0 #Reset the stopped counter
+            moving = True #Set the flag for the white ball moving
+            annotation = "Moving" 
+            previousBalls = [] #Reset the list for average ball locations after a shot
+        else:
+            moveCounter += 1 #If the white has only moved once in the alloted period of time:
+            moving = False #Set the moving flag to false
+    else: #Else, the white is currently thought to be stationary
+        if stopCounter < 20: #If the white has moved in the past 20 frames:
+            stopCounter += 1 #Add one to the count of stationary frames
+            moving = True #Set the moving flag to true
+            previousBalls.append(previousColours[9]) #Add the current detected balls to the previous balls list
+            annotation = previousColours[9]
+        elif stopCounter == 20: #Else if the ball has just been deemed to have stopped:
+            moveCounter = 0 #Reset the count of moving frames
+            stopCounter += 1 #Add one to the count of stationary frames
+            moving = False #Set the moving flag to false
+
+            ballsWhenMoving = Counter() #Create a new counter for average ball detections after the white moved
+            ballsWhenStopped = Counter() #Create a new counter for average ball detections before the white moved
+            for counter in previousBalls: #Loop through every moving ball detection index
+                ballsWhenMoving += counter #Add the count to the total ballsWhenMoving counter
+            for colour in ballsWhenMoving: #Loop through every colour in the counter
+                ballsWhenMoving[colour] = round(ballsWhenMoving[colour]/20) #Average the detections out
+            for x in range(9): #Loop through every stationary ball detection but the most recent
+                ballsWhenStopped += previousColours[x] #Add the count to the total ballsWhenStopped counter
+            for colour in ballsWhenStopped: #Loop through every colour in the counter
+                ballsWhenStopped[colour] = round(ballsWhenStopped[colour]/9) #Average the detections out
+            pottedBall = list((ballsWhenStopped - ballsWhenMoving).elements()) #Create a list for every ball that was in frame before the white moved but not after
+
+            if pottedBall: #If a ball was potted:
+                if "white" in pottedBall or "shadedWhite" in pottedBall: #If the ball was the white:
+                    annotation = "pot miss"
+                    currentPlayer = not currentPlayer #Switch the current player at the table
+                    playerScores[int(currentPlayer)] += 4 #Add 4 points to the new player
+                else: #Else, the player has potted a ball:
+                    playerScores[int(currentPlayer)] += ballValues[pottedBall[0]] #Add the value of the ball potted to the player's score
+                annotation = str(playerScores)
+            else: #Else, the player has misseda ball, so switch to the other player
+                currentPlayer = not currentPlayer
+                annotation = "pot miss"
+                switchCounter += 1
+        else: #Else, Continue adding to the stop counter
+            stopCounter += 1
+            moving = False
+            annotation = "not moving"
+    
+    previousWhite = roundedCoordinates# Replace the previous white position with the current white position
+    
+    # ===================== Drawing to the Screen =====================
+    frame = cv.putText(frame, str(annotation), (40, 40), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
+
+    frame = cv.copyMakeBorder(frame, 0, 60, 0, 0, borderType=cv.BORDER_CONSTANT, value=(0, 0, 0)) #Make a black border of height 60px at the bottom of the screen
+    height, width, channels = frame.shape #Get the width and height of the frame
+    frame = cv.putText(frame, ("Player 1"), (40, height-20), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2) #Add text for player 1's name
+    frame = cv.putText(frame, ("Player 2"), (width-300, height-20), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2) #Add text for player 2's name
+    frame = cv.rectangle(frame, (int((width/2)-100), height-60), (int((width/2)+100), height), (255, 255, 255), -1) #Add The box that contains the players' scores
+    frame = cv.line(frame, (int(width/2), height-10), (int(width/2), height-50), (0, 0, 0), 1) #Add a line to seperate the 2 scores
+    frame = cv.putText(frame, str(playerScores[0]), (int((width/2)-60), height-20), cv.FONT_HERSHEY_COMPLEX, 1, (0, 0, 0), 2) #Add text for the first player's score
+    frame = cv.putText(frame, str(playerScores[1]), (int((width/2)+30), height-20), cv.FONT_HERSHEY_COMPLEX, 1, (0, 0, 0), 2) #Add text for the second player's score
+    if not currentPlayer: #If the first player is at the table:
+        frame = cv.circle(frame, (int((width/2)-180), height-30), 10, (255, 255, 255), -1) #Display a circle to show that this player is at the table
+    else: #Else, the second player is at the table:
+        frame = cv.circle(frame, (int((width/2)+180), height-30), 10, (255, 255, 255), -1) #Display a circle to show that this player is at the table
+
+    cv.imshow("Detections", frame)#Display the annotated frame to the screen
+
+    # cv.imshow("detected circles", frame)
+    cv.imshow("Grey frame", mask)
+
+    if cv.waitKey(1) == ord('q'): #If the 'q' key is pressed, stop the program
+        break
+    if cv.waitKey(1) == ord('r'): #If the 'r' key is pressed, reset the scores
+        playerScores = [0,0]
