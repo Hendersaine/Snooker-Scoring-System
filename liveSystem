@@ -14,7 +14,7 @@ ballColours = {
     "yellow" : (30, 160, 255),
     "green" : (85, 250, 222),
     "brown" : (15, 165, 165),
-    "blue" : (97, 115, 204),
+    "blue" : (107, 255, 99),
     "pink" : (9, 90, 236),
     "black" : (73, 102, 65),
     "white" : (44, 15, 255),
@@ -64,30 +64,35 @@ def findClosestColour(colour, ballColours):
     print(bestColour)
     return bestColour #Return the best colour
 
-# ===================== Initial Declarations =====================
-#Find the base path for the file
-base_dir = os.path.dirname(os.path.abspath(__file__))
+#base_dir = os.path.dirname(os.path.abspath(__file__))
 
-model = YOLO("yolo26m.yaml")#Load the medium version of YOLOv26
+# ===================== Initial Declarations =====================
+model = YOLO("yolo26m.yaml") #Load the medium version of YOLOv26
 model = YOLO("yolo26m.pt")
-video_path = os.path.join(base_dir, "Images", "SnookerVid14.mp4") #Load the selected video from the path provided
-cap = cv.VideoCapture(video_path)#Open the video to be processed
+
+#Get the system webcam information and use this for the video capture device
+s = 0
+if len(sys.argv) > 1:
+    s = sys.argv[1]
+    print(sys.argv)
+
+cap = cv.VideoCapture(1)
 
 #Define the base values for neccesary variables
 previousWhite, roundedCoordinates = [0, 0], [0, 0]
 previousBalls = []
 previousColours = [Counter() for x in range(10)]
 playerScores = [0, 0]
-stopCounter = 30
+stopCounter = 0
 moveCounter = 0
 moving, currentPlayer = False, False
 positionRounding = 2
 switchCounter = -1
 annotation = ""
-frameCount = 0
+alive = True
 
 # ===================== Main Sequence =====================
-while cap.isOpened(): #Run while the video capture is open
+while alive: #Run while the system is active
     ret, frame = cap.read() #Close if there is no next frame found
     if not ret:
         break
@@ -174,6 +179,7 @@ while cap.isOpened(): #Run while the video capture is open
     previousWhite = roundedCoordinates# Replace the previous white position with the current white position
 
     # ===================== Drawing to the Screen =====================
+    #annotated = cv.putText(annotated, str(annotation), (40, 40), cv.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
 
     annotated = cv.copyMakeBorder(annotated, 0, 60, 0, 0, borderType=cv.BORDER_CONSTANT, value=(0, 0, 0)) #Make a black border of height 60px at the bottom of the screen
     height, width, channels = annotated.shape #Get the width and height of the frame
@@ -192,6 +198,8 @@ while cap.isOpened(): #Run while the video capture is open
 
     if cv.waitKey(1) == ord('q'): #If the 'q' key is pressed, stop the program
         break
+    if cv.waitKey(1) == ord('r'): #If the 'r' key is pressed, reset the scores
+        playerScores = [0,0]
 #If the loop has been terminated,
 cap.release() #Close the video capture
 cv.destroyAllWindows() #Close the frame view window
